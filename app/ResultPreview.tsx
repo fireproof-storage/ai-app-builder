@@ -18,6 +18,7 @@ interface ResultPreviewProps {
   completedMessage?: string;
   currentMessage?: { content: string };
   currentStreamContent?: string;
+  restartCount?: number; // P005e
   onScreenshotCaptured?: (screenshotData: string) => void;
 }
 
@@ -417,6 +418,7 @@ function ResultPreview({
   completedMessage,
   currentMessage,
   currentStreamContent,
+  restartCount = 0, // P005e
   onScreenshotCaptured,
 }: ResultPreviewProps) {
   const [activeView, setActiveView] = useState<'preview' | 'code'>('preview');
@@ -716,7 +718,7 @@ function ResultPreview({
         // Show sandbox
         <div data-testid="sandpack-provider">
           <SandpackProvider
-            key={isStreaming ? 'streaming' : displayCode}
+            key={isStreaming ? 'streaming' : `${displayCode}-${restartCount}`} // P7bfe
             template="vite-react"
             options={{
               externalResources: ['https://cdn.tailwindcss.com'],
