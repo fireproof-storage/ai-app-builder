@@ -19,6 +19,10 @@ export function useChat(
   const [isStreaming, setIsStreaming] = useState(false);
   const [completedCode, setCompletedCode] = useState<string>('');
   const [completedMessage, setCompletedMessage] = useState('');
+  // Track message segments for debugging
+  const segmentTracker = useRef<Array<{type: 'text' | 'code' | 'pre-code' | 'post-code', content: string}>>([]);
+  // Track current code line count for UI updates
+  const codeLineCount = useRef<number>(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const parserState = useRef<RegexParser>(new RegexParser());
@@ -67,6 +71,7 @@ export function useChat(
           const result = (newMessages as Function)(prev);
           // Only update if the result is actually different
           if (JSON.stringify(result) !== JSON.stringify(prev)) {
+            console.debug('Updating messages:', result);
             return result;
           }
           return prev;
@@ -75,6 +80,7 @@ export function useChat(
         // Only update if the new messages are different
         setMessages((prev) => {
           if (JSON.stringify(newMessages) !== JSON.stringify(prev)) {
+            console.debug('Updating messages:', newMessages);
             return newMessages;
           }
           return prev;
@@ -86,7 +92,7 @@ export function useChat(
 
   // Function to build conversation history for the prompt
   function buildMessageHistory() {
-    return messages.map((msg) => ({
+    const history = messages.map((msg) => ({
       role: msg.type === 'user' ? ('user' as const) : ('assistant' as const),
       content:
         msg.type === 'user'
@@ -99,6 +105,8 @@ export function useChat(
                 : ''
             }`,
     }));
+    console.debug('Message history:', history);
+    return history;
   }
 
   // Initialize parser with event listeners
@@ -108,7 +116,12 @@ export function useChat(
 
     // Add event listeners
     parserState.current.on('text', (textChunk: string, fullText: string) => {
-      setCurrentStreamedText(fullText); // Update with the full displayText from parser
+      // Only update with text when not in a code block to prevent code duplication
+      if (!parserState.current.inCodeBlock) {
+        // Instead of using the parser's fullText (which might contain code), 
+        // we'll only use the new chunk if we're not in a code block
+        setCurrentStreamedText(prevText => prevText + textChunk);
+      }
     });
 
     parserState.current.on('code', (code: string, language: string) => {
@@ -126,6 +139,7 @@ export function useChat(
       // Dependencies detected
     });
 
+    console.debug('Parser initialized with event listeners');
     return parserState.current;
   }, [streamingCode]);
 
@@ -139,6 +153,10 @@ export function useChat(
       setIsGenerating(true);
       // Reset the raw stream buffer
       rawStreamBuffer.current = '';
+      // Reset segment tracker
+      segmentTracker.current = [];
+      // Reset code line counter
+      codeLineCount.current = 0;
 
       // Add user message
       setMessages((prev) => [...prev, { text: input, type: 'user' }]);
@@ -214,18 +232,128 @@ export function useChat(
                   // Feed the chunk to our parser
                   parser.write(content);
 
-                  // Direct check for code block markers
-                  if (!writingCodeMessageAdded && content.includes('```')) {
-                    setCurrentStreamedText((prevText) => {
-                      const updatedText = prevText + '\n\n> Writing code...\n\n';
-                      return updatedText;
-                    });
-                    writingCodeMessageAdded = true;
+                  // Track content for segment analysis
+                  if (parser.inCodeBlock) {
+                    // We're in code block mode
+                    if (segmentTracker.current.length === 0 || 
+                        segmentTracker.current[segmentTracker.current.length - 1].type !== 'code') {
+                      // Start new code segment
+                      console.debug('🧩 NEW CODE SEGMENT STARTED');
+                      segmentTracker.current.push({type: 'code', content: ''});
+                      
+                      // Only add transition indicator if we haven't already set "Writing code..."
+                      if (!writingCodeMessageAdded) {
+                        // Use a direct setText approach instead of appending to avoid code leakage
+                        setCurrentStreamedText(prevText => {
+                          const baseText = parser.displayText.replace(/```[\s\S]*?```/g, '').trim();
+                          return baseText + '\n\n> Implementing solution... 💻\n\n';
+                        });
+                        writingCodeMessageAdded = true;
+                        codeLineCount.current = 0; // Reset line count for new code block
+                      } else {
+                        // For additional code blocks, add a new indicator with line count
+                        const codeBlockNumber = segmentTracker.current
+                          .filter(segment => segment.type === 'code')
+                          .length;
+                          
+                        setCurrentStreamedText(prevText => {
+                          const baseText = parser.displayText.replace(/```[\s\S]*?```/g, '').trim();
+                          return baseText + `\n\n> Adding code snippet #${codeBlockNumber}... 📝\n\n`;
+                        });
+                        codeLineCount.current = 0; // Reset line count for new code block
+                      }
+                    }
+                    // Update current code segment
+                    const currentSegment = segmentTracker.current[segmentTracker.current.length - 1];
+                    currentSegment.content = parser.codeBlockContent;
+                  } else {
+                    // We're in text mode
+                    if (segmentTracker.current.length === 0) {
+                      // First segment is pre-code text
+                      console.debug('🧩 NEW PRE-CODE TEXT SEGMENT STARTED');
+                      segmentTracker.current.push({type: 'pre-code', content: content});
+                    } else if (segmentTracker.current[segmentTracker.current.length - 1].type === 'code') {
+                      // After code, this is post-code text
+                      console.debug('🧩 NEW POST-CODE TEXT SEGMENT STARTED');
+                      segmentTracker.current.push({type: 'post-code', content: content});
+                      
+                      // Add transition indicator for post-code explanation
+                      setCurrentStreamedText(prevText => {
+                        // Only add this marker if we're not showing code
+                        if (!prevText.includes('```')) {
+                          return prevText.trim() + '\n\n> Explaining implementation... 🔍\n\n';
+                        }
+                        return prevText;
+                      });
+                    } else {
+                      // Continue existing text segment
+                      const currentSegment = segmentTracker.current[segmentTracker.current.length - 1];
+                      currentSegment.content += content;
+                    }
                   }
 
                   // Also update streaming code directly from parser's current state
                   if (parser.inCodeBlock) {
+                    console.debug('📝 UPDATING CODE BLOCK:', parser.codeBlockContent.length, 'chars');
+                    // Only update the preview code, not the streamed text display
                     setStreamingCode(parser.codeBlockContent);
+                    
+                    // Count lines and update indicator as code grows
+                    const newLineCount = parser.codeBlockContent.split('\n').length;
+                    if (newLineCount !== codeLineCount.current) {
+                      codeLineCount.current = newLineCount;
+                      
+                      // Get the first meaningful line of code for preview
+                      const codeLines = parser.codeBlockContent.split('\n');
+                      let firstCodeLine = '';
+                      
+                      // Find first non-empty line after any language marker
+                      for (let i = 0; i < codeLines.length; i++) {
+                        // Skip the language marker line (if any)
+                        if (i === 0 && codeLines[i].trim().startsWith('```')) continue;
+                        const line = codeLines[i].trim();
+                        if (line && !line.startsWith('```')) {
+                          firstCodeLine = line;
+                          break;
+                        }
+                      }
+                      
+                      // Create a preview snippet (truncate if too long)
+                      const codePreview = firstCodeLine.length > 40 
+                        ? firstCodeLine.substring(0, 38) + '...'
+                        : firstCodeLine;
+                      
+                      // Instead of trying to modify the existing text (which might contain code),
+                      // regenerate the clean message text with the updated indicator
+                      setCurrentStreamedText(prevText => {
+                        // Get the base text without any code blocks
+                        const baseText = parser.displayText.replace(/```[\s\S]*?```/g, '').trim();
+                        
+                        // Find appropriate indicator pattern based on which code block we're in
+                        const codeBlockNumber = segmentTracker.current
+                          .filter(segment => segment.type === 'code')
+                          .length;
+                        
+                        let indicator;
+                        if (codeBlockNumber <= 1) {
+                          // First code block - only show line count, no preview if there's no good first line
+                          if (firstCodeLine.trim()) {
+                            indicator = `> Implementing solution... 💻 (${codeLineCount.current} lines of code)\n> ${codePreview}`;
+                          } else {
+                            indicator = `> Implementing solution... 💻 (${codeLineCount.current} lines of code)`;
+                          }
+                        } else {
+                          // Additional code blocks
+                          if (firstCodeLine.trim()) {
+                            indicator = `> Adding code snippet #${codeBlockNumber}... 📝 (${codeLineCount.current} lines of code)\n> ${codePreview}`;
+                          } else {
+                            indicator = `> Adding code snippet #${codeBlockNumber}... 📝 (${codeLineCount.current} lines of code)`;
+                          }
+                        }
+                        
+                        return baseText + '\n\n' + indicator;
+                      });
+                    }
                   }
                 }
               } catch (e) {
@@ -237,9 +365,22 @@ export function useChat(
 
         // End the parser stream
         parser.end();
+        console.debug('🏁 STREAM ENDED - Parser state:', {
+          inCodeBlock: parser.inCodeBlock,
+          codeLength: parser.codeBlockContent.length,
+          textLength: parser.displayText.length,
+          dependencies: Object.keys(parser.dependencies).length
+        });
 
-        // Clean up the message text - use parser's displayText instead of currentStreamedText
-        let cleanedMessage = parser.displayText || currentStreamedText;
+        // Log segment structure
+        console.debug('📊 MESSAGE SEGMENTS:', segmentTracker.current.map(segment => ({
+          type: segment.type,
+          length: segment.content.length,
+          preview: segment.content.substring(0, 30).replace(/\n/g, '\\n') + '...'
+        })));
+
+        // Clean up the message text - use clean text without code blocks
+        let cleanedMessage = parser.displayText.replace(/```[\s\S]*?```/g, '').trim();
 
         // Clean up any extra whitespace at the beginning
         cleanedMessage = cleanedMessage.trimStart();
@@ -251,24 +392,104 @@ export function useChat(
           .replace(/^\s*""\s*:\s*""[}\s]*/i, '') // Remove artifacts
           .trim();
 
+        console.debug('🧹 CLEANED MESSAGE:', cleanedMessage.substring(0, 100) + '...');
+
         // If cleanedMessage is still empty but we have code, add a default message
         if (!cleanedMessage && parser.codeBlockContent) {
           cleanedMessage = "Here's your code:";
+          console.debug('📌 USING DEFAULT MESSAGE for empty text with code');
+        }
+
+        // Use the message segments to rebuild a clean final message with indicators
+        let finalMessageText = cleanedMessage;
+        
+        // Add indicators for each code segment
+        const codeSegments = segmentTracker.current.filter(segment => segment.type === 'code');
+        if (codeSegments.length > 0) {
+          // If the message just ends with a code block, add our indicators
+          const codeLines = parser.codeBlockContent.split('\n');
+          const codeLineCount = codeLines.length;
+          
+          // Get the first meaningful line for the preview
+          let firstCodeLine = '';
+          for (let i = 0; i < codeLines.length; i++) {
+            if (i === 0 && codeLines[i].trim().startsWith('```')) continue;
+            const line = codeLines[i].trim();
+            if (line && !line.startsWith('```')) {
+              firstCodeLine = line;
+              break;
+            }
+          }
+          
+          // Create preview snippet
+          const codePreview = firstCodeLine.trim() ? 
+            (firstCodeLine.length > 40 ? firstCodeLine.substring(0, 38) + '...' : firstCodeLine) : '';
+          
+          // Create indicator based on which code block
+          if (codeSegments.length === 1) {
+            // If message has no content, add a nice explanation
+            if (!finalMessageText) {
+              finalMessageText = "I've created your application with the following code:";
+            }
+            
+            // Add indicator for main code block
+            if (codePreview) {
+              finalMessageText += `\n\n> Implementation complete! 💻 (${codeLineCount} lines of code)\n> ${codePreview}`;
+            } else {
+              finalMessageText += `\n\n> Implementation complete! 💻 (${codeLineCount} lines of code)`;
+            }
+          } else {
+            // For multiple code blocks
+            if (!finalMessageText) {
+              finalMessageText = "I've created multiple code components for your application:";
+            }
+            
+            // If user can see text right now, we want to preserve that same text
+            if (currentStreamedText.includes('Implementing solution') || 
+                currentStreamedText.includes('Adding code snippet')) {
+              finalMessageText = currentStreamedText;
+            } else {
+              // Add indicator for multiple code blocks
+              if (codePreview) {
+                finalMessageText += `\n\n> Multiple code components implemented! 💻 (${codeLineCount} lines total)\n> ${codePreview}`;
+              } else {
+                finalMessageText += `\n\n> Multiple code components implemented! 💻 (${codeLineCount} lines total)`;
+              }
+            }
+          }
         }
 
         // Add AI response with code and dependencies
+        console.debug('💬 FINAL MESSAGE STRUCTURE:', {
+          textLength: finalMessageText.length,
+          hasCode: !!parser.codeBlockContent,
+          codeLength: parser.codeBlockContent.length,
+          dependenciesCount: Object.keys(parser.dependencies).length
+        });
+        
+        // Store the original raw content for future rendering approaches
+        const originalRawContent = parser.displayText;
+        
         setMessages((prev) => [
           ...prev,
           {
-            text: cleanedMessage,
+            text: finalMessageText,
             type: 'ai',
             code: parser.codeBlockContent,
             dependencies: parser.dependencies,
+            // Include segments in the message structure
+            segments: segmentTracker.current.map(segment => ({
+              type: segment.type,
+              content: segment.content
+            })),
+            // Store the complete raw stream content
+            rawContent: originalRawContent,
+            completed: true
           },
         ]);
 
         // Store the completed message
-        setCompletedMessage(cleanedMessage);
+        setCompletedMessage(finalMessageText);
 
         // Execute callback with generated code if available
         if (parser.codeBlockContent) {
