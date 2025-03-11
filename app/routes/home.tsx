@@ -348,6 +348,7 @@ export default function Home() {
   const memoizedResultPreview = useMemo(() => {
     return (
       <ResultPreview
+        className="mobile-code-height"
         code={state.generatedCode}
         streamingCode={streamingPropsRef.current.streamingCode}
         isStreaming={streamingPropsRef.current.isStreaming}
@@ -381,11 +382,11 @@ export default function Home() {
   ]);
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh)' }}>
-      <div style={{ flex: '0 0 33.333%', overflow: 'hidden', position: 'relative' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh)' }}>
+      <div className="mobile-code-height" style={{ flex: '0 0 100%', overflow: 'hidden', position: 'relative' }}>
         {memoizedChatInterface}
       </div>
-      <div style={{ flex: '0 0 66.667%', overflow: 'hidden', position: 'relative' }}>
+      <div style={{ flex: '0 0 100%', overflow: 'hidden', position: 'relative' }}>
         {memoizedResultPreview}
       </div>
     </div>
