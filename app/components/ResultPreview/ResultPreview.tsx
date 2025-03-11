@@ -1,6 +1,5 @@
 import {
   SandpackCodeEditor,
-  SandpackLayout,
   SandpackPreview,
   SandpackProvider,
   useSandpack,
@@ -241,7 +240,7 @@ function ResultPreview({
   }, [sessionId, isStreaming, code]);
 
   return (
-    <div className="h-full" style={{ overflow: 'hidden' }}>
+    <div className="h-full mobile-single-column code-window" style={{ height: '75vh' }}>
       <style>
         {`
           @keyframes spin-slow {
@@ -404,7 +403,7 @@ function ResultPreview({
               isStreaming={isStreaming}
             />
             {isStreaming && <SandpackScrollController isStreaming={isStreaming} />}
-            <SandpackLayout className="h-full" style={{ height: 'calc(100vh - 49px)' }}>
+            <div className="h-full mobile-code-height" style={{ height: '75vh' }}>
               <div
                 style={{
                   display: activeView === 'preview' ? 'block' : 'none',
@@ -437,7 +436,7 @@ function ResultPreview({
                   showInlineErrors
                 />
               </div>
-            </SandpackLayout>
+            </div>
           </SandpackProvider>
         </div>
       )}
