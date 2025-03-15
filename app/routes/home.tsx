@@ -1,6 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router';
-import ChatInterface from '../components/ChatInterface';
+import ChatInterface, {
+  getChatInputComponent,
+  getSuggestionsComponent,
+} from '../components/ChatInterface';
 import ResultPreview from '../components/ResultPreview/ResultPreview';
 import ChatHeaderContent from '../components/ChatHeaderContent';
 import ResultPreviewHeaderContent from '../components/ResultPreview/ResultPreviewHeaderContent';
@@ -8,6 +11,7 @@ import { useSimpleChat } from '../hooks/useSimpleChat';
 import AppLayout from '../components/AppLayout';
 import { decodeStateFromUrl } from '../utils/sharing';
 import { encodeTitle } from '~/components/SessionSidebar/utils';
+import SessionSidebar from '../components/SessionSidebar';
 
 export function meta() {
   return [
@@ -26,11 +30,18 @@ export default function UnifiedSession() {
   const [activeView, setActiveView] = useState<'code' | 'preview'>('code');
   const [previewReady, setPreviewReady] = useState(false);
   const [bundlingComplete] = useState(true);
+  const [mobilePreviewShown, setMobilePreviewShown] = useState(true);
+
   const [isSidebarVisible, setIsSidebarVisible] = useState(false);
 
   // Directly create an openSidebar function
   const openSidebar = useCallback(() => {
     setIsSidebarVisible(true);
+  }, []);
+
+  // Add closeSidebar function
+  const closeSidebar = useCallback(() => {
+    setIsSidebarVisible(false);
   }, []);
 
   // Handle preview loaded event
@@ -59,42 +70,72 @@ export default function UnifiedSession() {
     }
   }, [location.search]);
 
+  // Get the chat input component to pass separately to AppLayout
+  const chatInputComponent = getChatInputComponent({
+    input: chatState.input,
+    setInput: chatState.setInput,
+    sendMessage: chatState.sendMessage,
+    isStreaming: chatState.isStreaming,
+    inputRef: chatState.inputRef,
+  });
+
+  // Get the suggestions component to pass separately to AppLayout
+  const suggestionsComponent = getSuggestionsComponent({
+    setInput: chatState.setInput,
+    inputRef: chatState.inputRef,
+  });
+
+  // useEffect(() => {
+  //   console.log('chatState.sessionId', chatState.sessionId);
+  // }, [chatState.sessionId]);
+
   return (
-    <AppLayout
-      headerLeft={
-        <ChatHeaderContent onOpenSidebar={openSidebar} title={chatState.title || 'New Chat'} />
-      }
-      headerRight={
-        <ResultPreviewHeaderContent
-          previewReady={previewReady}
-          activeView={activeView}
-          setActiveView={setActiveView}
-          bundlingComplete={bundlingComplete}
-          isStreaming={chatState.isStreaming}
-          code={chatState.selectedCode?.content || ''}
-          dependencies={chatState.selectedDependencies || {}}
-        />
-      }
-      chatPanel={
-        <ChatInterface
-          {...chatState}
-          isSidebarVisible={isSidebarVisible}
-          setIsSidebarVisible={setIsSidebarVisible}
-        />
-      }
-      previewPanel={
-        <ResultPreview
-          sessionId={chatState.sessionId || ''}
-          code={chatState.selectedCode?.content || ''}
-          dependencies={chatState.selectedDependencies || {}}
-          isStreaming={chatState.isStreaming}
-          codeReady={chatState.codeReady}
-          onScreenshotCaptured={chatState.addScreenshot}
-          activeView={activeView}
-          setActiveView={setActiveView}
-          onPreviewLoaded={handlePreviewLoaded}
-        />
-      }
-    />
+    <>
+      <AppLayout
+        headerLeft={
+          <ChatHeaderContent onOpenSidebar={openSidebar} title={chatState.title || 'New Chat'} />
+        }
+        headerRight={
+          <ResultPreviewHeaderContent
+            previewReady={previewReady}
+            activeView={activeView}
+            setActiveView={setActiveView}
+            setMobilePreviewShown={setMobilePreviewShown}
+            bundlingComplete={bundlingComplete}
+            isStreaming={chatState.isStreaming}
+            code={chatState.selectedCode?.content || ''}
+            dependencies={chatState.selectedDependencies || {}}
+          />
+        }
+        chatPanel={
+          <ChatInterface
+            {...chatState}
+            renderChatInput={false} // Don't render chat input in the panel
+            renderSuggestions={false} // Don't render suggestions in the panel
+          />
+        }
+        previewPanel={
+          <ResultPreview
+            sessionId={chatState.sessionId || ''}
+            code={chatState.selectedCode?.content || ''}
+            dependencies={chatState.selectedDependencies || {}}
+            isStreaming={chatState.isStreaming}
+            codeReady={chatState.codeReady}
+            onScreenshotCaptured={chatState.addScreenshot}
+            activeView={activeView}
+            setActiveView={setActiveView}
+            onPreviewLoaded={handlePreviewLoaded}
+          />
+        }
+        chatInput={chatInputComponent}
+        suggestionsComponent={chatState.docs.length === 0 ? suggestionsComponent : undefined}
+        mobilePreviewShown={mobilePreviewShown}
+      />
+      <SessionSidebar
+        isVisible={isSidebarVisible}
+        onClose={closeSidebar}
+        sessionId={chatState.sessionId || ''}
+      />
+    </>
   );
 }
